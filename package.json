@@ -1,7 +1,7 @@
 {
-  "name": "gomonhub-whatsapp-bot",
+  "name": "whatsapp-ai-support-bot",
   "version": "1.0.0",
-  "description": "WhatsApp 24/7 AI Customer Support & Chat Bot for GOMONHUB Tournament",
+  "description": "24/7 WhatsApp AI Customer Support & Chat Bot",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
