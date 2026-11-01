@@ -344,9 +344,9 @@ async function generateAiSupportReply(userMessage, senderPhone, imageBase64 = nu
     } catch (_) {}
 
     const apiKey = process.env.GEMINI_API_KEY || currentConfig.gemini_api_key || config.gemini_api_key || '';
-    const primaryModel = process.env.GEMINI_MODEL || currentConfig.ai_model || config.ai_model || 'gemini-1.5-flash';
-    const secondaryModel = (primaryModel === 'gemini-1.5-flash') ? 'gemini-2.0-flash' : 'gemini-1.5-flash';
-    const tertiaryModel = 'gemini-1.5-flash-8b';
+    const primaryModel = process.env.GEMINI_MODEL || currentConfig.ai_model || config.ai_model || 'gemini-3.5-flash';
+    const secondaryModel = (primaryModel === 'gemini-3.5-flash') ? 'gemini-3.5-flash-lite' : 'gemini-3.5-flash';
+    const tertiaryModel = 'gemini-3.8-flash';
 
     const mem = getChatMemory(senderPhone);
 
