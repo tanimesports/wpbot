@@ -1,0 +1,11 @@
+# Node modules (Dependencies)
+node_modules/
+
+# WhatsApp Login Session & Private Credentials (NEVER upload to GitHub)
+auth_session/
+
+# Environment files & Logs
+.env
+*.log
+.DS_Store
+
