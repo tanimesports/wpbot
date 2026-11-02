@@ -29,7 +29,7 @@ console.error = (...args) => { originalError(...args); pushLog('ERROR', args); }
 // Load configuration
 const configPath = path.join(__dirname, 'config.json');
 let config = {
-    bot_phone_number: "8801671961399",
+    bot_phone_number: "8801353262318",
     business_name: "",
     social_links: {
         website: "",
