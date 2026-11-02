@@ -468,9 +468,9 @@ ${JSON.stringify(knowledge, null, 2)}`;
         const apiKey = keysToTry[kIdx];
         const keyTag = `Key ${kIdx + 1}/${totalKeys}`;
 
-        // 1. Try Primary Model (8s timeout)
+        // 1. Try Primary Model (10s timeout)
         try {
-            cleanReply = await requestGeminiApi(primaryModel, data, apiKey, 8000);
+            cleanReply = await requestGeminiApi(primaryModel, data, apiKey, 10000);
             if (cleanReply) break;
         } catch (primaryErr) {
             console.warn(`⚠️ [GEMINI ${keyTag} BUSY (${primaryModel})] ${primaryErr.message}`);
