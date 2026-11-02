@@ -73,13 +73,14 @@ function restoreSessionFromEnv() {
         fs.mkdirSync(sessionDir, { recursive: true });
     }
     const credsPath = path.join(sessionDir, 'creds.json');
-    if (process.env.WHATSAPP_SESSION_DATA && !fs.existsSync(credsPath)) {
+    const envSessionRaw = process.env.WHATSAPP_SESSION_DATA || process.env.NAME_OF_VARIABLE || process.env.SESSION_DATA;
+    if (envSessionRaw && !fs.existsSync(credsPath)) {
         try {
-            const rawJson = Buffer.from(process.env.WHATSAPP_SESSION_DATA.trim(), 'base64').toString('utf8');
+            const rawJson = Buffer.from(envSessionRaw.trim(), 'base64').toString('utf8');
             fs.writeFileSync(credsPath, rawJson, 'utf8');
-            console.log('\n🔑 [PERMANENT SESSION RESTORED] Loaded credentials from WHATSAPP_SESSION_DATA env variable!\n');
+            console.log('\n🔑 [PERMANENT SESSION RESTORED] Loaded credentials from environment variable!\n');
         } catch (e) {
-            console.error('[SESSION RESTORE ERROR] Could not decode WHATSAPP_SESSION_DATA:', e.message);
+            console.error('[SESSION RESTORE ERROR] Could not decode environment session data:', e.message);
         }
     }
 }
