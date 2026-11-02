@@ -8,6 +8,24 @@ const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
 
+// Real-time memory log buffer for remote inspection via /api/recent-logs
+const recentLogs = [];
+const originalLog = console.log;
+const originalWarn = console.warn;
+const originalError = console.error;
+
+function pushLog(type, args) {
+    const timeStr = new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Dhaka' });
+    const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+    recentLogs.push(`[${timeStr}] [${type}] ${msg}`);
+    if (recentLogs.length > 200) recentLogs.shift();
+}
+
+console.log = (...args) => { originalLog(...args); pushLog('INFO', args); };
+console.warn = (...args) => { originalWarn(...args); pushLog('WARN', args); };
+console.error = (...args) => { originalError(...args); pushLog('ERROR', args); };
+
+
 // Load configuration
 const configPath = path.join(__dirname, 'config.json');
 let config = {
@@ -46,13 +64,16 @@ function getSessionKeyString() {
     return null;
 }
 
+let isEnvSessionInvalid = false;
+
 function restoreSessionFromEnv() {
+    if (isEnvSessionInvalid) return;
     const sessionDir = path.join(__dirname, 'auth_session');
     if (!fs.existsSync(sessionDir)) {
         fs.mkdirSync(sessionDir, { recursive: true });
     }
     const credsPath = path.join(sessionDir, 'creds.json');
-    if (process.env.WHATSAPP_SESSION_DATA) {
+    if (process.env.WHATSAPP_SESSION_DATA && !fs.existsSync(credsPath)) {
         try {
             const rawJson = Buffer.from(process.env.WHATSAPP_SESSION_DATA.trim(), 'base64').toString('utf8');
             fs.writeFileSync(credsPath, rawJson, 'utf8');
@@ -117,6 +138,7 @@ function getSmartFallbackReply(userMessage, hasImage = false, senderPhone = null
     const isAngry = /(?:bainchod|mc|bc|madarchod|khankir|chutiya|বাইনচোদ|খানকির|চুদি|শালা|হারামি)/i.test(raw);
 
     const asksLink = /(?:website|ওয়েবসাইট|ওয়েবসাইট|web link|সাইট লিংক|সাইট কোথায়|সাইট খুঁজে|কোথায় পাব)/i.test(raw) || (raw.includes('link') && !asksAllSocial && !asksFb && !asksYt && !asksTiktok && !asksIg && !asksThreads && !asksTg && !asksDc && !asksWaChannel && !asksPayment);
+    const isHearing = /(?:shunte.*(?:pa|pao|paccho|apw|acho)|শুনতে.*(?:পাচ্ছ|পাচ্ছেন|পাও)|আছো|aso|achis|online|লাইভ|active)/i.test(raw);
     const isThanks = /(?:ধন্যবাদ|thanks|thx|tnx|shukriya|শুকরিয়া)/i.test(raw);
     const isHowAreYou = /(?:কেমন আছেন|kemon achen|bhalo achen|ভালো আছেন|kmn aso|kemon aso)/i.test(raw);
     const isDoing = /(?:ki koro|কী করো|কি করো|কি কর|ki korso)/i.test(raw);
@@ -136,6 +158,10 @@ function getSmartFallbackReply(userMessage, hasImage = false, senderPhone = null
             `> টাকা দেওয়ার পর প্রমান স্বরূপ Screenshot জমা দিবেন এবং নম্বরের লাস্ট ডিজিট বলবেন।\n\n` +
             `> টাকা দেওয়ার পর নিজ দায়িত্বে কনর্ফাম গ্রুপের লিংক নিয়ে নিবেন, তা না হলে স্লট শেষ হয়ে গেলে আমরা দায়ী থাকবো না।\n\n` +
             `> পেমেন্ট করতে দেরি হলে সেই সময়ের মধ্যে স্লট শেষ হয়ে গেলে পেমেন্ট ব্যাক দেওয়া হবে না, পরবর্তীতে যেকোনো সময়ে স্লট নিতে পারবেন।`;
+    }
+
+    if (isHearing) {
+        return `হ্যাঁ ভাই একদম শুনতে পাচ্ছি! বলেন কী খবর বা কী সমস্যা?`;
     }
 
     if (asksWho) {
@@ -238,6 +264,7 @@ function getSmartFallbackReply(userMessage, hasImage = false, senderPhone = null
 
 function requestGeminiApi(modelName, data, apiKey, timeoutMs = 5000) {
     return new Promise((resolve, reject) => {
+        let timedOut = false;
         const req = https.request({
             hostname: 'generativelanguage.googleapis.com',
             path: `/v1beta/models/${modelName}:generateContent?key=${apiKey}`,
@@ -252,6 +279,7 @@ function requestGeminiApi(modelName, data, apiKey, timeoutMs = 5000) {
             let body = '';
             res.on('data', chunk => body += chunk);
             res.on('end', () => {
+                if (timedOut) return;
                 if (res.statusCode >= 200 && res.statusCode < 300) {
                     try {
                         const json = JSON.parse(body);
@@ -266,10 +294,13 @@ function requestGeminiApi(modelName, data, apiKey, timeoutMs = 5000) {
             });
         });
         req.on('timeout', () => {
+            timedOut = true;
             req.destroy();
             reject(new Error(`Timeout after ${timeoutMs}ms`));
         });
-        req.on('error', err => reject(err));
+        req.on('error', err => {
+            if (!timedOut) reject(err);
+        });
         req.write(data);
         req.end();
     });
@@ -508,7 +539,21 @@ function queueMessageForSender(senderPhone, fn) {
     return nextPromise;
 }
 
+let reconnectTimeout = null;
+
 async function startWhatsAppBot() {
+    if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
+        reconnectTimeout = null;
+    }
+    if (sock) {
+        try {
+            sock.ev.removeAllListeners();
+            sock.end();
+        } catch (_) {}
+        sock = null;
+    }
+
     const sessionDir = path.join(__dirname, 'auth_session');
     restoreSessionFromEnv();
     const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
@@ -549,16 +594,34 @@ async function startWhatsAppBot() {
 
         if (connection === 'close') {
             isConnected = false;
-            const shouldReconnect = (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut);
-            console.log(`\n⚠️ Connection closed: ${lastDisconnect?.error?.message || 'Unknown'}. Reconnecting: ${shouldReconnect}`);
-            if (shouldReconnect) {
-                setTimeout(startWhatsAppBot, 3000);
+            currentQr = null;
+            currentQrDataUrl = null;
+            currentPairingCode = null;
+
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            const isLoggedOut = (statusCode === DisconnectReason.loggedOut);
+            console.log(`\n⚠️ Connection closed: ${lastDisconnect?.error?.message || 'Unknown'} (status: ${statusCode || 'none'}). Logged out: ${isLoggedOut}`);
+
+            if (isLoggedOut) {
+                console.log('🗑️ [SESSION LOGGED OUT] Clearing invalidated session files to generate fresh QR/Pairing code...');
+                isEnvSessionInvalid = true;
+                try {
+                    const sessionDir = path.join(__dirname, 'auth_session');
+                    if (fs.existsSync(sessionDir)) {
+                        fs.rmSync(sessionDir, { recursive: true, force: true });
+                    }
+                } catch (_) {}
+                reconnectTimeout = setTimeout(startWhatsAppBot, 2000);
+            } else {
+                console.log('🔄 [AUTO-RECONNECT] Reconnecting in 3 seconds...');
+                reconnectTimeout = setTimeout(startWhatsAppBot, 3000);
             }
         } else if (connection === 'open') {
             isConnected = true;
             currentQr = null;
             currentQrDataUrl = null;
             currentPairingCode = null;
+            isEnvSessionInvalid = false;
             const sk = getSessionKeyString();
             console.log('\n✅ [WHATSAPP CONNECTED] Bot is active & listening 24/7!\n');
             if (sk) {
@@ -570,8 +633,15 @@ async function startWhatsAppBot() {
     async function processSingleMessage(msg) {
         if (!msg || !msg.message || msg.key.fromMe || msg.key.remoteJid === 'status@broadcast') return;
 
-        const senderJid = msg.key.remoteJid;
-        const senderPhone = senderJid.replace(/@.*$/, '');
+        const rawSenderJid = msg.key.remoteJid;
+        const isLid = rawSenderJid?.endsWith('@lid');
+        const altPn = msg.key.senderPn || msg.key.participantPn;
+        // If message is from an LID and we have the phone number, prefer the phone JID
+        const targetJid = (isLid && altPn)
+            ? (altPn.includes('@') ? altPn : `${altPn}@s.whatsapp.net`)
+            : rawSenderJid;
+
+        const senderPhone = (altPn || rawSenderJid).replace(/@.*$/, '');
 
         const imgMessage = msg.message.imageMessage ||
             msg.message.viewOnceMessage?.message?.imageMessage ||
@@ -600,7 +670,7 @@ async function startWhatsAppBot() {
                     msg,
                     'buffer',
                     {},
-                    { logger: pino({ level: 'silent' }), reuploadRequest: sock.updateMediaMessage }
+                    { logger: pino({ level: 'silent' }), reuploadRequest: sock?.updateMediaMessage }
                 );
                 if (buffer && buffer.length > 0) {
                     imageBase64 = buffer.toString('base64');
@@ -616,18 +686,19 @@ async function startWhatsAppBot() {
         // General conversation, greetings & queries handled by AI Support Agent
         console.log(`💬 [MESSAGE RECEIVED] From: ${senderPhone} | Text: "${text}" | HasImage: ${!!imageBase64}`);
         try {
-            // Instantly notify user with typing presence so they know bot is online & responding
-            sock.sendPresenceUpdate('composing', senderJid).catch(() => {});
+            if (sock) sock.sendPresenceUpdate('composing', rawSenderJid).catch(() => {});
             const aiReply = await generateAiSupportReply(text, senderPhone, imageBase64, imageMime);
-            await sock.sendMessage(senderJid, { text: aiReply });
+            // Quoting the incoming message guarantees delivery to both regular and LID WhatsApp chats
+            await sock.sendMessage(targetJid, { text: aiReply }, { quoted: msg });
             console.log(`🤖 [AI SUPPORT REPLIED] To: ${senderPhone}`);
         } catch (aiErr) {
             console.error(`❌ [AI SUPPORT ERROR] ${aiErr.message}`);
-            await sock.sendMessage(senderJid, {
-                text: `স্বাগতম ভাই!\nকীভাবে সাহায্য করতে পারি বলুন।`
-            });
+            try {
+                const fallbackReply = getSmartFallbackReply(text, !!imageBase64, senderPhone);
+                await sock.sendMessage(rawSenderJid, { text: fallbackReply }, { quoted: msg });
+            } catch (_) {}
         } finally {
-            sock.sendPresenceUpdate('paused', senderJid).catch(() => {});
+            if (sock) sock.sendPresenceUpdate('paused', rawSenderJid).catch(() => {});
         }
     }
 
@@ -678,8 +749,10 @@ const server = http.createServer(async (req, res) => {
     if (parsedUrl.pathname === '/api/bot-logout' && req.method === 'POST') {
         try {
             console.log('🔄 [LOGOUT REQUESTED] Clearing WhatsApp session for new number link...');
+            isEnvSessionInvalid = true;
             if (sock) {
                 try { await sock.logout(); } catch (_) { try { sock.end(); } catch (__) {} }
+                sock = null;
             }
             isConnected = false;
             currentQr = null;
@@ -696,7 +769,7 @@ const server = http.createServer(async (req, res) => {
 
             setTimeout(() => {
                 startWhatsAppBot();
-            }, 1500);
+            }, 1000);
         } catch (err) {
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, message: err.message }));
@@ -715,23 +788,51 @@ const server = http.createServer(async (req, res) => {
                 if (!phone.startsWith('88') && phone.startsWith('01')) {
                     phone = '88' + phone;
                 }
-                if (sock && !isConnected) {
+                if (!sock) {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        success: false,
+                        message: 'WhatsApp সকেট এখনও লোড হচ্ছে। অনুগ্রহ করে ৫-১০ সেকেন্ড অপেক্ষা করে আবার চেষ্টা করুন।'
+                    }));
+                    return;
+                }
+                if (isConnected) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        success: false,
+                        message: 'WhatsApp ইতোমধ্যে কানেক্টেড আছে!'
+                    }));
+                    return;
+                }
+                try {
                     const code = await sock.requestPairingCode(phone);
                     currentPairingCode = code;
                     res.writeHead(200, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({ success: true, pairingCode: code }));
-                } else {
+                } catch (pairErr) {
+                    console.warn('⚠️ [PAIRING ERROR]', pairErr.message);
                     res.writeHead(400, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({
                         success: false,
-                        message: isConnected ? 'WhatsApp is already connected!' : 'Bot socket not ready yet. Please wait a few seconds.'
+                        message: `পেয়ারিং কোড তৈরি করা যায়নি (${pairErr.message})। কয়েক সেকেন্ড অপেক্ষা করে আবার চেষ্টা করুন অথবা ক্যামেরা দিয়ে QR কোড স্ক্যান করুন।`
                     }));
+                    if (pairErr.message.includes('Closed') || pairErr.message.includes('closed')) {
+                        setTimeout(startWhatsAppBot, 1000);
+                    }
                 }
             } catch (err) {
                 res.writeHead(500, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: false, message: err.message }));
             }
         });
+        return;
+    }
+
+    
+    // API: Real-time Live Log Feed for remote diagnosis
+    if (parsedUrl.pathname === '/api/recent-logs' && req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ success: true, count: recentLogs.length, logs: recentLogs }));
         return;
     }
 
