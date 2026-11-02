@@ -521,6 +521,18 @@ ${JSON.stringify(knowledge, null, 2)}`;
 // Prevents concurrent requests colliding on Gemini free tier quota (HTTP 429) and race conditions in chat memory.
 const senderQueues = {};
 
+// In-memory message store to satisfy Baileys getMessage requirements (eliminates decryption stalls & Bad MAC on retry)
+const messageStore = new Map();
+function saveMessageToStore(key, message) {
+    if (key?.id && message) {
+        messageStore.set(key.id, message);
+        if (messageStore.size > 800) {
+            const firstKey = messageStore.keys().next().value;
+            messageStore.delete(firstKey);
+        }
+    }
+}
+
 function queueMessageForSender(senderPhone, fn) {
     if (!senderQueues[senderPhone]) {
         senderQueues[senderPhone] = Promise.resolve();
@@ -576,10 +588,16 @@ async function startWhatsAppBot() {
         },
         logger: silentLogger,
         printQRInTerminal: false,
-        browser: Browsers.windows('Desktop'),
+        browser: Browsers.macOS('Chrome'),
         syncFullHistory: false,
         markOnlineOnConnect: false,
-        maxMsgRetryCount: 1
+        maxMsgRetryCount: 1,
+        getMessage: async (key) => {
+            if (key?.id && messageStore.has(key.id)) {
+                return messageStore.get(key.id);
+            }
+            return undefined;
+        }
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -720,6 +738,9 @@ async function startWhatsAppBot() {
     sock.ev.on('messages.upsert', async ({ messages }) => {
         if (!messages || messages.length === 0) return;
         for (const msg of messages) {
+            if (msg.key?.id && msg.message) {
+                saveMessageToStore(msg.key, msg.message);
+            }
             if (!msg || !msg.message || msg.key.fromMe || msg.key.remoteJid === 'status@broadcast') continue;
             const senderPhone = (msg.key.remoteJid || '').replace(/@.*$/, '');
             queueMessageForSender(senderPhone, () => processSingleMessage(msg));
