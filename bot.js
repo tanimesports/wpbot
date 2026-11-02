@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, Browsers, downloadMediaMessage } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, Browsers, downloadMediaMessage, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode');
 const path = require('path');
@@ -567,14 +567,19 @@ async function startWhatsAppBot() {
     console.log(`🌐 Live Bot Portal & QR Page: http://localhost:3000`);
     console.log(`======================================================\n`);
 
+    const silentLogger = pino({ level: 'silent' });
     sock = makeWASocket({
         version,
-        auth: state,
-        logger: pino({ level: 'silent' }),
+        auth: {
+            creds: state.creds,
+            keys: makeCacheableSignalKeyStore(state.keys, silentLogger)
+        },
+        logger: silentLogger,
         printQRInTerminal: false,
         browser: Browsers.windows('Desktop'),
         syncFullHistory: false,
-        markOnlineOnConnect: false
+        markOnlineOnConnect: false,
+        maxMsgRetryCount: 1
     });
 
     sock.ev.on('creds.update', saveCreds);
