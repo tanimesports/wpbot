@@ -591,7 +591,7 @@ async function startWhatsAppBot() {
         printQRInTerminal: false,
         browser: Browsers.macOS('Chrome'),
         syncFullHistory: false,
-        markOnlineOnConnect: false,
+        markOnlineOnConnect: true,
         maxMsgRetryCount: 1,
         getMessage: async (key) => {
             if (key?.id && messageStore.has(key.id)) {
@@ -626,10 +626,11 @@ async function startWhatsAppBot() {
 
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             const isLoggedOut = (statusCode === DisconnectReason.loggedOut);
-            console.log(`\n⚠️ Connection closed: ${lastDisconnect?.error?.message || 'Unknown'} (status: ${statusCode || 'none'}). Logged out: ${isLoggedOut}`);
+            const isConflict = (statusCode === 440 || statusCode === 401);
+            console.log(`\n⚠️ Connection closed: ${lastDisconnect?.error?.message || 'Unknown'} (status: ${statusCode || 'none'}). Logged out: ${isLoggedOut}, Conflict: ${isConflict}`);
 
-            if (isLoggedOut) {
-                console.log('🗑️ [SESSION LOGGED OUT] Clearing invalidated session files to generate fresh QR/Pairing code...');
+            if (isLoggedOut || isConflict) {
+                console.log('🗑️ [SESSION INVALID] Clearing invalidated/conflicted session files to generate fresh QR/Pairing code...');
                 isEnvSessionInvalid = true;
                 try {
                     const sessionDir = path.join(__dirname, 'auth_session');
