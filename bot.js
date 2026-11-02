@@ -742,6 +742,10 @@ const server = http.createServer(async (req, res) => {
     // API: Bot Connection Status & Live QR
     if (parsedUrl.pathname === '/api/bot-status' && req.method === 'GET') {
         const sessionKey = getSessionKeyString();
+        const connectedPhone = sock?.user?.id
+            ? sock.user.id.split(':')[0].replace(/@.*$/, '')
+            : (config.bot_phone_number || '');
+        const connectedName = sock?.user?.name || '';
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
             connected: isConnected,
@@ -749,7 +753,8 @@ const server = http.createServer(async (req, res) => {
             qrImage: currentQrDataUrl || null,
             pairingCode: currentPairingCode,
             sessionKey: isConnected ? sessionKey : null,
-            botPhone: config.bot_phone_number
+            botPhone: connectedPhone,
+            botName: connectedName
         }));
         return;
     }
@@ -994,7 +999,7 @@ const server = http.createServer(async (req, res) => {
     <!-- NOT CONNECTED SCREEN -->
     <div id="viewScan">
       <h1>WhatsApp কানেক্ট করুন</h1>
-      <p class="sub">আপনার <b>${config.bot_phone_number}</b> নম্বরের ফোন দিয়ে নিচের QR কোডটি স্ক্যান করুন:</p>
+      <p class="sub">আপনার যেকোনো ফোন দিয়ে নিচের QR কোডটি সরাসরি স্ক্যান করুন:</p>
 
       <div class="qr-container">
         <img id="qrImage" src="" alt="WhatsApp QR Code">
@@ -1010,11 +1015,12 @@ const server = http.createServer(async (req, res) => {
       </div>
 
       <div class="pairing-box">
-        <div style="font-size: 0.85rem; color: #94a3b8; font-weight: 600;">অথবা ক্যামেরা স্ক্যান ছাড়া কোড দিয়ে লিংক করুন:</div>
+        <div style="font-size: 0.85rem; color: #94a3b8; font-weight: 600; margin-bottom: 8px;">অথবা পেয়ারিং কোড দিয়ে লিংক করুন:</div>
+        <input type="text" id="phoneInput" placeholder="01353262318" value="${config.bot_phone_number || ''}" style="width: 100%; padding: 10px 14px; background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; color: #fff; font-size: 0.95rem; margin-bottom: 8px; outline: none; text-align: center;">
         <button class="btn-action" onclick="getPairingCode()" id="btnPair">Pairing Code তৈরি করুন 🔑</button>
         <div id="pairingCodeDisplay" class="pairing-code" style="display: none;">------</div>
         <div id="pairingHelp" style="display: none; font-size: 0.78rem; color: #94a3b8; margin-top: 6px;">
-          ফোনে "Link with phone number instead" সিলেক্ট করে এই কোডটি লিখুন।
+          ফোনে "Link with phone number instead"-এ এই নম্বরটি দিয়ে কোডটি লিখুন।
         </div>
       </div>
     </div>
@@ -1085,13 +1091,14 @@ const server = http.createServer(async (req, res) => {
 
     async function getPairingCode() {
       const btn = document.getElementById('btnPair');
+      const inputVal = (document.getElementById('phoneInput')?.value || '').trim() || '${config.bot_phone_number}';
       btn.innerText = 'কোড তৈরি হচ্ছে...';
       btn.disabled = true;
       try {
         const res = await fetch('/api/request-pairing', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ phone: '${config.bot_phone_number}' })
+          body: JSON.stringify({ phone: inputVal })
         });
         const data = await res.json();
         if (data.success) {
