@@ -326,6 +326,21 @@ function formatGeminiContents(history = [], currentParts = []) {
     return clean;
 }
 
+function getGeminiApiKeys() {
+    let currentConfig = config;
+    try {
+        if (fs.existsSync(configPath)) {
+            currentConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        }
+    } catch (_) {}
+
+    const raw = process.env.GEMINI_API_KEY || currentConfig.gemini_api_key || config.gemini_api_key || '';
+    if (!raw) return [];
+    return raw.split(',').map(k => k.trim()).filter(Boolean);
+}
+
+let geminiKeyIndex = 0;
+
 // AI Customer Support Assistant Helper
 async function generateAiSupportReply(userMessage, senderPhone, imageBase64 = null, mimeType = 'image/jpeg') {
     let knowledge = {};
@@ -343,14 +358,14 @@ async function generateAiSupportReply(userMessage, senderPhone, imageBase64 = nu
         }
     } catch (_) {}
 
-    const apiKey = process.env.GEMINI_API_KEY || currentConfig.gemini_api_key || config.gemini_api_key || '';
+    const apiKeys = getGeminiApiKeys();
     const primaryModel = process.env.GEMINI_MODEL || currentConfig.ai_model || config.ai_model || 'gemini-3.5-flash';
     const secondaryModel = (primaryModel === 'gemini-3.5-flash') ? 'gemini-3.5-flash-lite' : 'gemini-3.5-flash';
     const tertiaryModel = 'gemini-3.8-flash';
 
     const mem = getChatMemory(senderPhone);
 
-    if (!apiKey) {
+    if (apiKeys.length === 0) {
         const fallback = getSmartFallbackReply(userMessage, !!imageBase64, senderPhone);
         mem.history.push({ role: 'user', parts: [{ text: userMessage || '[ছবি]' }] });
         mem.history.push({ role: 'model', parts: [{ text: fallback }] });
@@ -409,21 +424,47 @@ ${JSON.stringify(knowledge, null, 2)}`;
 
     let cleanReply = null;
 
-    // 1. Try Primary Ultra-Fast Model (10s realistic timeout)
-    try {
-        cleanReply = await requestGeminiApi(primaryModel, data, apiKey, 10000);
-    } catch (primaryErr) {
-        console.warn(`⚠️ [GEMINI PRIMARY BUSY/503 (${primaryModel})] ${primaryErr.message}. Instantly failing over to secondary model (${secondaryModel})...`);
-        // 2. Try Secondary Failover Model (8s timeout)
+    // Round-Robin Key Rotation order
+    const keysToTry = [];
+    const totalKeys = apiKeys.length;
+    for (let i = 0; i < totalKeys; i++) {
+        keysToTry.push(apiKeys[(geminiKeyIndex + i) % totalKeys]);
+    }
+    geminiKeyIndex = (geminiKeyIndex + 1) % totalKeys;
+
+    // Try each key in the pool with automatic failover
+    for (let kIdx = 0; kIdx < keysToTry.length; kIdx++) {
+        const apiKey = keysToTry[kIdx];
+        const keyTag = `Key ${kIdx + 1}/${totalKeys}`;
+
+        // 1. Try Primary Model (8s timeout)
         try {
-            cleanReply = await requestGeminiApi(secondaryModel, data, apiKey, 8000);
-        } catch (backupErr) {
-            console.warn(`⚠️ [GEMINI SECONDARY BUSY (${secondaryModel})] ${backupErr.message}. Failing over to tertiary model (${tertiaryModel})...`);
-            // 3. Try Tertiary Failover Model (6s timeout)
+            cleanReply = await requestGeminiApi(primaryModel, data, apiKey, 8000);
+            if (cleanReply) break;
+        } catch (primaryErr) {
+            console.warn(`⚠️ [GEMINI ${keyTag} BUSY (${primaryModel})] ${primaryErr.message}`);
+
+            // If rate limit (429 / RESOURCE_EXHAUSTED / quota) and other keys are available, jump to next key immediately
+            if (keysToTry.length > 1 && (primaryErr.message.includes('429') || primaryErr.message.includes('RESOURCE_EXHAUSTED') || primaryErr.message.includes('quota'))) {
+                console.warn(`🔄 [AUTO KEY FAILOVER] Switching to next API key in pool...`);
+                continue;
+            }
+
+            // 2. Try Secondary Model on this key (6s timeout)
             try {
-                cleanReply = await requestGeminiApi(tertiaryModel, data, apiKey, 6000);
-            } catch (tertErr) {
-                console.warn(`⚠️ [GEMINI TERTIARY ERROR (${tertiaryModel})] ${tertErr.message}. Switching to smart instant fallback.`);
+                cleanReply = await requestGeminiApi(secondaryModel, data, apiKey, 6000);
+                if (cleanReply) break;
+            } catch (backupErr) {
+                if (keysToTry.length > 1) {
+                    continue;
+                }
+                // 3. Try Tertiary Model (5s timeout)
+                try {
+                    cleanReply = await requestGeminiApi(tertiaryModel, data, apiKey, 5000);
+                    if (cleanReply) break;
+                } catch (tertErr) {
+                    console.warn(`⚠️ [GEMINI TERTIARY ERROR (${tertiaryModel})] ${tertErr.message}`);
+                }
             }
         }
     }
@@ -473,8 +514,10 @@ async function startWhatsAppBot() {
     const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
     const { version, isLatest } = await fetchLatestBaileysVersion();
 
+    const activeKeys = getGeminiApiKeys();
     console.log(`\n======================================================`);
     console.log(`🤖 WhatsApp AI Customer Support Bot starting...`);
+    console.log(`🔑 [AI KEY POOL] Active Gemini API Key(s): ${activeKeys.length}`);
     console.log(`📦 Using Baileys version: ${version.join('.')}, isLatest: ${isLatest}`);
     console.log(`🌐 Live Bot Portal & QR Page: http://localhost:3000`);
     console.log(`======================================================\n`);
