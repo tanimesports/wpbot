@@ -572,7 +572,7 @@ async function startWhatsAppBot() {
         auth: state,
         logger: pino({ level: 'silent' }),
         printQRInTerminal: false,
-        browser: Browsers.ubuntu('Chrome'),
+        browser: Browsers.windows('Desktop'),
         syncFullHistory: false,
         markOnlineOnConnect: false
     });
@@ -690,6 +690,12 @@ async function startWhatsAppBot() {
         try {
             if (sock) sock.sendPresenceUpdate('composing', rawSenderJid).catch(() => {});
             const aiReply = await generateAiSupportReply(text, senderPhone, imageBase64, imageMime);
+
+            // Natural human typing delay simulation (1.5 to 3.5 seconds based on text length)
+            // Ensures WhatsApp anti-spam algorithms detect natural human behavior instead of instant bot automation
+            const typingDelay = Math.min(3500, Math.max(1500, (aiReply.length * 35)));
+            await new Promise(r => setTimeout(r, typingDelay));
+
             // Quoting the incoming message guarantees delivery to both regular and LID WhatsApp chats
             await sock.sendMessage(targetJid, { text: aiReply }, { quoted: msg });
             console.log(`🤖 [AI SUPPORT REPLIED] To: ${senderPhone}`);
@@ -697,6 +703,7 @@ async function startWhatsAppBot() {
             console.error(`❌ [AI SUPPORT ERROR] ${aiErr.message}`);
             try {
                 const fallbackReply = getSmartFallbackReply(text, !!imageBase64, senderPhone);
+                await new Promise(r => setTimeout(r, 1200));
                 await sock.sendMessage(rawSenderJid, { text: fallbackReply }, { quoted: msg });
             } catch (_) {}
         } finally {
